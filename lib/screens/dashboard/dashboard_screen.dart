@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../models/progress.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/progress_provider.dart';
 import '../../widgets/pet_view.dart';
 import '../../widgets/streak_chip.dart';
@@ -15,7 +16,16 @@ class DashboardScreen extends ConsumerWidget {
     final progress = ref.watch(progressProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Home')),
+      appBar: AppBar(
+        title: const Text('Home'),
+        actions: [
+          IconButton(
+            tooltip: 'Log out',
+            icon: const Icon(Icons.logout),
+            onPressed: () => ref.read(authProvider.notifier).logout(),
+          ),
+        ],
+      ),
       body: progress.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(
