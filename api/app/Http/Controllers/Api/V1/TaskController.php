@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreTaskRequest;
 use App\Http\Resources\TaskResource;
 use App\Models\Task;
+use App\Services\GamificationService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class TaskController extends Controller
 {
@@ -70,5 +72,29 @@ class TaskController extends Controller
         $task->delete();
 
         return response()->noContent();
+    }
+
+    // PATCH /api/v1/tasks/{task}/complete
+    public function complete(Task $task, GamificationService $game)
+    {
+        $this->authorize('update', $task);   // TaskPolicy: owner only
+
+        return DB::transaction(function () use ($task, $game) {
+            // Lock the row so two requests at once cannot both award XP.
+            $task = Task::whereKey($task->id)->lockForUpdate()->first();
+
+            if ($task->status === 'completed') {
+                return response()->json(['message' => 'This task is already completed.'], 409);
+            }
+
+            $task->forceFill(['status' => 'completed', 'completed_at' => now()])->save();
+
+            return response()->json([
+                'data' => array_merge(
+                    ['task' => (new TaskResource($task->load('subject')))->resolve()],
+                    $game->awardForTask($task)
+                ),
+            ]);
+        });
     }
 }

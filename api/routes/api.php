@@ -1,6 +1,9 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\FocusSessionController;
+use App\Http\Controllers\Api\V1\PetController;
+use App\Http\Controllers\Api\V1\ProgressController;
 use App\Http\Controllers\Api\V1\SubjectController;
 use App\Http\Controllers\Api\V1\TaskController;
 use Illuminate\Support\Facades\Route;
@@ -17,6 +20,16 @@ Route::prefix('v1')->group(function () {
         Route::middleware('role:student')->group(function () {
             Route::apiResource('subjects', SubjectController::class)->except('show');
             Route::apiResource('tasks', TaskController::class)->except('show');
+            Route::patch('tasks/{task}/complete', [TaskController::class, 'complete']);
+
+            Route::get('sessions', [FocusSessionController::class, 'index']);
+            Route::post('sessions', [FocusSessionController::class, 'start']);
+            Route::patch('sessions/{session}/finish', [FocusSessionController::class, 'finish']);
+            Route::patch('sessions/{session}/cancel', [FocusSessionController::class, 'cancel']);
+
+            Route::get('progress', [ProgressController::class, 'show']);
+            Route::get('pet', [PetController::class, 'show']);
+            Route::patch('pet', [PetController::class, 'update']);
         });
 
         // Admin routes (role:admin) will be added later.
