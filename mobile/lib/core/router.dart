@@ -11,6 +11,7 @@ import '../screens/dashboard/dashboard_screen.dart';
 import '../screens/tasks/tasks_screen.dart';
 import '../screens/focus/focus_screen.dart';
 import '../screens/pet/pet_screen.dart';
+import '../screens/subjects/subjects_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   // Re-checks the redirect whenever the login state changes.
@@ -40,6 +41,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/splash', builder: (context, state) => const SplashScreen()),
       GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
       GoRoute(path: '/register', builder: (context, state) => const RegisterScreen()),
+      GoRoute(path: '/subjects', builder: (context, state) => const SubjectsScreen()),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) =>
             MainShell(navigationShell: navigationShell),
