@@ -101,12 +101,13 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
   }
 
   Future<void> _refreshTasks() async {
-    try {
-      await ref.refresh(taskProvider.future);
-    } catch (_) {
-      // The error state will appear in the task list.
-    }
+  try {
+    final refreshedTasks = ref.refresh(taskProvider.future);
+    await refreshedTasks;
+  } catch (_) {
+    // The error state will appear in the task list.
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -678,7 +679,7 @@ class _TaskCard extends StatelessWidget {
 
                         const SizedBox(width: 8),
 
-                        // XP reward and priority.
+                        // Dynamic XP preview and priority.
                         Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -689,9 +690,9 @@ class _TaskCard extends StatelessWidget {
                                 size: 21,
                               )
                             else
-                              const Text(
-                                '+50 XP',
-                                style: TextStyle(
+                              Text(
+                                _estimatedXpLabel(task),
+                                style: const TextStyle(
                                   color: GalaxyColors.gold,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w900,
@@ -722,6 +723,37 @@ class _TaskCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  // Preview the task's possible XP.
+  // Laravel calculates the actual reward on completion.
+  String _estimatedXpLabel(Task task) {
+    final dueDate = task.dueDate;
+
+    if (dueDate == null) {
+      return '+10 XP';
+    }
+
+    // Compare against the Philippine calendar day.
+    final manilaNow = DateTime.now()
+        .toUtc()
+        .add(const Duration(hours: 8));
+
+    final today = DateTime.utc(
+      manilaNow.year,
+      manilaNow.month,
+      manilaNow.day,
+    );
+
+    final deadline = DateTime.utc(
+      dueDate.year,
+      dueDate.month,
+      dueDate.day,
+    );
+
+    return deadline.isBefore(today)
+        ? '+10 XP'
+        : '+15 XP';
   }
 
   Color _priorityColor(String priority) {
@@ -1261,11 +1293,11 @@ class _TaskFormDialogState
             const SizedBox(height: 12),
 
             DropdownButtonFormField<String>(
-              value: _priority,
-              decoration: const InputDecoration(
-                labelText: 'Priority',
-                prefixIcon: Icon(Icons.flag_outlined),
-              ),
+            initialValue: _priority,
+            decoration: const InputDecoration(
+            labelText: 'Priority',
+            prefixIcon: Icon(Icons.flag_outlined),
+            ),
               items: const [
                 DropdownMenuItem(
                   value: 'low',

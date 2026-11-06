@@ -1,24 +1,29 @@
+
+import '../core/api_service.dart';
+import '../core/token_storage.dart';
 import '../models/progress.dart';
 
 class ProgressRepository {
-  // MOCK: later this will call GET /api/v1/progress through the API service.
-  Future<Progress> fetchProgress() async {
-    await Future.delayed(const Duration(milliseconds: 800));
+  ProgressRepository()
+      : _api = ApiService(TokenStorage());
 
-    // Sample JSON shaped like what the API will send back.
-    final json = <String, dynamic>{
-      'user_name': 'Student',
-      'level': 3,
-      'total_xp': 260,
-      'xp_into_level': 60,
-      'xp_for_next_level': 150,
-      'streak_days': 4,
-      'minutes_today': 35,
-      'tasks_due_today': 2,
-      'pet_name': 'Mochi',
-      'pet_stage': 'baby',
-      'pet_mood': 'happy',
-    };
+  final ApiService _api;
+
+  // GET /api/v1/progress
+  // Fetch actual student progress from Laravel.
+  Future<Progress> fetchProgress() async {
+    final response = await _api.get('/progress');
+
+    // Validate Laravel's JSON response.
+    if (response is! Map) {
+      throw const FormatException(
+        'Invalid progress response from server.',
+      );
+    }
+
+    final json = Map<String, dynamic>.from(response);
+
+    // Convert real Laravel data into the Flutter model.
     return Progress.fromJson(json);
   }
 }

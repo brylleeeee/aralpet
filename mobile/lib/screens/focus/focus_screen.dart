@@ -4,19 +4,26 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/api_service.dart';
 import '../../core/theme.dart';
+import '../../core/token_storage.dart';
+import '../../providers/progress_provider.dart';
 
-class FocusScreen extends StatefulWidget {
+class FocusScreen extends ConsumerStatefulWidget {
   const FocusScreen({super.key});
 
   @override
-  State<FocusScreen> createState() => _FocusScreenState();
+  ConsumerState<FocusScreen> createState() =>
+      _FocusScreenState();
 }
 
-class _FocusScreenState extends State<FocusScreen>
+class _FocusScreenState extends ConsumerState<FocusScreen>
     with WidgetsBindingObserver {
   static const List<int> _presets = [25, 45, 60];
+
+  late final ApiService _api = ApiService(TokenStorage());
 
   Timer? _ticker;
   DateTime? _endsAt;
@@ -24,19 +31,29 @@ class _FocusScreenState extends State<FocusScreen>
   Duration _duration = const Duration(minutes: 25);
   Duration _remaining = const Duration(minutes: 25);
 
+  int? _sessionId;
   bool _isRunning = false;
   bool _isFinished = false;
+  bool _busy = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _restoreActiveSession();
+      }
+    });
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _isRunning) {
-      _updateRemaining();
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
+    if (state == AppLifecycleState.resumed) {
+      _restoreActiveSession();
     }
   }
 
@@ -47,21 +64,153 @@ class _FocusScreenState extends State<FocusScreen>
     super.dispose();
   }
 
-  // Start or resume the timer.
-  void _startTimer() {
-    if (_isRunning) return;
+  Map<String, dynamic> _asMap(dynamic value) {
+    return Map<String, dynamic>.from(value as Map);
+  }
+
+  int _asInt(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 0;
+  }
+
+  void _showError(Object error) {
+    if (!mounted) return;
+
+    final message = error is ApiException
+        ? error.message
+        : error is FormatException
+            ? error.message
+            : 'Unable to contact the Focus server. '
+                'Please try again.';
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  // Synchronize the timer with Laravel.
+  void _applySession(Map<String, dynamic> response) {
+    final rawSession = response['session'];
+
+    if (rawSession is! Map) {
+      throw const FormatException(
+        'Laravel did not return a valid focus session.',
+      );
+    }
+
+    final session = _asMap(rawSession);
+
+    final id = _asInt(session['id']);
+    final minutes = _asInt(
+      session['planned_minutes'],
+    );
+
+    final status =
+        session['status']?.toString() ?? '';
+
+    if (id <= 0 ||
+        minutes <= 0 ||
+        (status != 'active' && status != 'paused')) {
+      throw const FormatException(
+        'Laravel returned invalid focus session details.',
+      );
+    }
+
+    // FIX 1:
+    // A missing remaining_seconds value is NOT zero.
+    // Reject missing or invalid timer data.
+    final rawSeconds = response['remaining_seconds'];
+
+    final int? remainingSeconds = rawSeconds is int
+        ? rawSeconds
+        : int.tryParse(
+            rawSeconds?.toString() ?? '',
+          );
+
+    if (remainingSeconds == null ||
+        remainingSeconds < 0 ||
+        remainingSeconds > minutes * 60) {
+      throw const FormatException(
+        'Laravel returned missing or invalid '
+        'remaining_seconds. Check the pause-aware '
+        'FocusSessionController.',
+      );
+    }
+
+    if (!mounted) return;
 
     _ticker?.cancel();
 
-    if (_remaining <= Duration.zero) {
-      _remaining = _duration;
-    }
+    final remaining = Duration(
+      seconds: remainingSeconds,
+    );
+
+    // FIX 2:
+    // An expired restored session will NOT automatically
+    // display a congratulations popup.
+    // The student can press Finish Session instead.
+    final running =
+        status == 'active' &&
+        remaining > Duration.zero;
 
     setState(() {
-      _isRunning = true;
+      _sessionId = id;
+      _duration = Duration(minutes: minutes);
+      _remaining = remaining;
+
+      _isRunning = running;
       _isFinished = false;
-      _endsAt = DateTime.now().add(_remaining);
+
+      _endsAt = running
+          ? DateTime.now().add(remaining)
+          : null;
+
+      _busy = false;
     });
+
+    if (running) {
+      _beginTicker();
+    }
+  }
+
+  // Restore an active or paused focus session.
+  Future<void> _restoreActiveSession() async {
+    if (!mounted || _busy) return;
+
+    setState(() => _busy = true);
+
+    try {
+      final response = _asMap(
+        await _api.get('/sessions/active'),
+      );
+
+      if (!mounted) return;
+
+      if (response['session'] == null) {
+        _ticker?.cancel();
+
+        setState(() {
+          _sessionId = null;
+          _isRunning = false;
+          _isFinished = false;
+          _endsAt = null;
+          _remaining = _duration;
+          _busy = false;
+        });
+      } else {
+        _applySession(response);
+      }
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() => _busy = false);
+      _showError(error);
+    }
+  }
+
+  // Start updating the local countdown.
+  void _beginTicker() {
+    _ticker?.cancel();
 
     _ticker = Timer.periodic(
       const Duration(milliseconds: 250),
@@ -69,14 +218,176 @@ class _FocusScreenState extends State<FocusScreen>
     );
   }
 
-  // Update using real clock time to avoid timer drift.
+  // Start a new session or resume a paused one.
+  
+Future<void> _startTimer() async {
+  if (_busy || _isRunning) return;
+
+  // If the countdown has reached zero,
+  // finish the existing session instead.
+  if (_sessionId != null &&
+      _remaining <= Duration.zero) {
+    await _finishTimer();
+    return;
+  }
+
+  setState(() {
+    _busy = true;
+  });
+
+  try {
+    // =========================================
+    // EXISTING SESSION: CHECK LARAVEL FIRST
+    // =========================================
+
+    if (_sessionId != null) {
+      final currentResponse = _asMap(
+        await _api.get('/sessions/active'),
+      );
+
+      if (!mounted) return;
+
+      final rawSession = currentResponse['session'];
+
+      // The previous session no longer exists.
+      if (rawSession == null) {
+        _ticker?.cancel();
+
+        setState(() {
+          _sessionId = null;
+          _isRunning = false;
+          _isFinished = false;
+          _endsAt = null;
+          _remaining = _duration;
+          _busy = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Your previous session has ended. '
+              'Press Start Focus to begin a new one.',
+            ),
+          ),
+        );
+
+        return;
+      }
+
+      final serverSession = _asMap(rawSession);
+
+      final serverStatus =
+          serverSession['status']?.toString() ?? '';
+
+      final serverId = _asInt(
+        serverSession['id'],
+      );
+
+      // CASE 1:
+      // Laravel says the session is already active.
+      // Don't call resume again; restore its countdown.
+      if (serverStatus == 'active') {
+        _applySession(currentResponse);
+        return;
+      }
+
+      // CASE 2:
+      // Laravel confirms the session is paused.
+      // It is safe to resume.
+      if (serverStatus == 'paused') {
+        final resumedResponse = _asMap(
+          await _api.patch(
+            '/sessions/$serverId/resume',
+          ),
+        );
+
+        if (!mounted) return;
+
+        _applySession(resumedResponse);
+        return;
+      }
+
+      throw const FormatException(
+        'The session cannot be resumed '
+        'because it has already ended.',
+      );
+    }
+
+    // =========================================
+    // NEW SESSION: START ON LARAVEL
+    // =========================================
+
+    final response = _asMap(
+      await _api.post(
+        '/sessions',
+        data: {
+          'planned_minutes': _duration.inMinutes,
+        },
+      ),
+    );
+
+    if (!mounted) return;
+
+    // Verify that Laravel returned a proper
+    // remaining_seconds value.
+    final rawSeconds = response['remaining_seconds'];
+
+    final remainingSeconds = rawSeconds is int
+        ? rawSeconds
+        : int.tryParse(
+            rawSeconds?.toString() ?? '',
+          );
+
+    if (remainingSeconds == null ||
+        remainingSeconds <= 0) {
+      throw const FormatException(
+        'Laravel returned invalid remaining time. '
+        'Please check the Focus Session backend.',
+      );
+    }
+
+    // Start the countdown only after receiving
+    // valid session information from Laravel.
+    _applySession(response);
+  } on ApiException catch (error) {
+    if (!mounted) return;
+
+    setState(() {
+      _busy = false;
+    });
+
+    // If the session changed status while the
+    // request was processing, sync it again.
+    if (error.statusCode == 409) {
+      await _restoreActiveSession();
+    } else {
+      _showError(error);
+    }
+  } catch (error) {
+    if (!mounted) return;
+
+    setState(() {
+      _busy = false;
+    });
+
+    _showError(error);
+  }
+}
+
+
+  // Update the countdown using real clock time
+  // so the timer does not drift.
   void _updateRemaining() {
-    if (!mounted || !_isRunning || _endsAt == null) {
+    if (!mounted ||
+        !_isRunning ||
+        _endsAt == null ||
+        _busy) {
       return;
     }
 
-    final milliseconds =
-        _endsAt!.difference(DateTime.now()).inMilliseconds;
+    final milliseconds = _endsAt!
+        .difference(DateTime.now())
+        .inMilliseconds;
 
     if (milliseconds <= 0) {
       _ticker?.cancel();
@@ -84,11 +395,11 @@ class _FocusScreenState extends State<FocusScreen>
       setState(() {
         _remaining = Duration.zero;
         _isRunning = false;
-        _isFinished = true;
         _endsAt = null;
       });
 
-      _showCompletionDialog();
+      // Only finish after a real countdown reaches zero.
+      unawaited(_finishTimer());
       return;
     }
 
@@ -103,37 +414,121 @@ class _FocusScreenState extends State<FocusScreen>
     }
   }
 
-  // Pause the countdown.
-  void _pauseTimer() {
-    if (!_isRunning || _endsAt == null) return;
+  // Pause the session on the Laravel server.
+  Future<void> _pauseTimer() async {
+    if (_busy ||
+        !_isRunning ||
+        _sessionId == null) {
+      return;
+    }
 
-    _updateRemaining();
+    setState(() => _busy = true);
 
-    if (!_isRunning || _endsAt == null) return;
+    try {
+      final response = _asMap(
+        await _api.patch(
+          '/sessions/$_sessionId/pause',
+        ),
+      );
 
-    _ticker?.cancel();
+      if (!mounted) return;
 
-    setState(() {
-      _isRunning = false;
-      _endsAt = null;
-    });
+      _applySession(response);
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() => _busy = false);
+      _showError(error);
+    }
   }
 
-  // Reset the countdown.
-  void _resetTimer() {
+  // Reset cancels the Laravel session without XP.
+  Future<void> _resetTimer() async {
+    if (_busy) return;
+
+    setState(() => _busy = true);
+
+    try {
+      if (_sessionId != null) {
+        await _api.patch(
+          '/sessions/$_sessionId/cancel',
+        );
+      }
+
+      if (!mounted) return;
+
+      _ticker?.cancel();
+
+      setState(() {
+        _sessionId = null;
+        _remaining = _duration;
+        _isRunning = false;
+        _isFinished = false;
+        _endsAt = null;
+        _busy = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() => _busy = false);
+      _showError(error);
+    }
+  }
+
+  // Finish the session and receive XP from Laravel.
+  Future<void> _finishTimer() async {
+    if (_busy || _sessionId == null) return;
+
     _ticker?.cancel();
 
     setState(() {
-      _remaining = _duration;
+      _busy = true;
       _isRunning = false;
-      _isFinished = false;
       _endsAt = null;
     });
+
+    try {
+      final response = _asMap(
+        await _api.patch(
+          '/sessions/$_sessionId/finish',
+        ),
+      );
+
+      if (!mounted) return;
+
+      final xpEarned = _asInt(
+        response['xp_earned'],
+      );
+
+      final durationMinutes = _asInt(
+        response['duration_minutes'],
+      );
+
+      // Update the Home Dashboard XP.
+      ref.invalidate(progressProvider);
+
+      setState(() {
+        _sessionId = null;
+        _remaining = Duration.zero;
+        _isFinished = true;
+        _busy = false;
+      });
+
+      await _showCompletionDialog(
+        xpEarned: xpEarned,
+        durationMinutes: durationMinutes,
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() => _busy = false);
+      _showError(error);
+    }
   }
 
   // Change the selected duration.
   void _selectDuration(int minutes) {
-    if (_isRunning) return;
+    if (_busy || _sessionId != null) return;
 
     _ticker?.cancel();
 
@@ -146,10 +541,9 @@ class _FocusScreenState extends State<FocusScreen>
     });
   }
 
-  // FIXED: Custom duration dialog.
-  // The TextFormField manages its own controller.
+  // Custom duration dialog.
   Future<void> _chooseCustomDuration() async {
-    if (_isRunning) return;
+    if (_busy || _sessionId != null) return;
 
     final formKey = GlobalKey<FormState>();
     int selectedMinutes = _duration.inMinutes;
@@ -166,7 +560,9 @@ class _FocusScreenState extends State<FocusScreen>
 
           form.save();
 
-          Navigator.of(dialogContext).pop(selectedMinutes);
+          Navigator.of(dialogContext).pop(
+            selectedMinutes,
+          );
         }
 
         return AlertDialog(
@@ -247,7 +643,7 @@ class _FocusScreenState extends State<FocusScreen>
     }
   }
 
-  // Format the remaining time.
+  // Format the countdown as MM:SS.
   String get _timeLabel {
     final totalSeconds = _remaining.inSeconds;
     final minutes = totalSeconds ~/ 60;
@@ -258,6 +654,10 @@ class _FocusScreenState extends State<FocusScreen>
   }
 
   String get _timerStatus {
+    if (_busy) {
+      return 'Syncing with server...';
+    }
+
     if (_isRunning) {
       return 'Stay focused';
     }
@@ -266,14 +666,25 @@ class _FocusScreenState extends State<FocusScreen>
       return 'Session complete!';
     }
 
-    if (_remaining < _duration) {
-      return 'Timer paused';
+    if (_sessionId != null) {
+      return _remaining <= Duration.zero
+          ? 'Ready to finish'
+          : 'Timer paused';
     }
 
     return 'Ready when you are';
   }
 
   String get _actionLabel {
+    if (_busy) {
+      return 'Please wait...';
+    }
+
+    if (_sessionId != null &&
+        _remaining <= Duration.zero) {
+      return 'Finish Session';
+    }
+
     if (_isRunning) {
       return 'Pause Session';
     }
@@ -282,15 +693,18 @@ class _FocusScreenState extends State<FocusScreen>
       return 'Start Again';
     }
 
-    if (_remaining < _duration) {
+    if (_sessionId != null) {
       return 'Resume Session';
     }
 
     return 'Start Focus';
   }
 
-  // Display a popup when the countdown finishes.
-  Future<void> _showCompletionDialog() async {
+  // Completion popup showing actual XP from Laravel.
+  Future<void> _showCompletionDialog({
+    required int xpEarned,
+    required int durationMinutes,
+  }) async {
     if (!mounted) return;
 
     await showDialog<void>(
@@ -328,20 +742,37 @@ class _FocusScreenState extends State<FocusScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Your ${_duration.inMinutes}-minute '
-                'focus countdown has finished.',
+                'You completed $durationMinutes full '
+                '${durationMinutes == 1 ? 'minute' : 'minutes'} '
+                'of focus.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: GalaxyColors.textSecondary,
                   height: 1.5,
                 ),
               ),
+
               const SizedBox(height: 15),
-              const Text(
-                'Great job staying committed '
-                'to your studies!',
+
+              Text(
+                '+$xpEarned XP',
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
+                  color: GalaxyColors.gold,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              Text(
+                xpEarned > 0
+                    ? 'Experience awarded by AralPet!'
+                    : 'No XP earned (under 10 minutes '
+                        'or daily cap reached).',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
                   color: GalaxyColors.mint,
                   fontWeight: FontWeight.w700,
                 ),
@@ -386,7 +817,7 @@ class _FocusScreenState extends State<FocusScreen>
       body: SafeArea(
         child: Stack(
           children: [
-            // Galaxy mountains.
+            // Decorative Galaxy mountains.
             const Positioned.fill(
               child: IgnorePointer(
                 child: CustomPaint(
@@ -409,7 +840,7 @@ class _FocusScreenState extends State<FocusScreen>
 
                 const SizedBox(height: 32),
 
-                // Focus mode label
+                // FOCUS MODE LABEL
                 Center(
                   child: Container(
                     padding: const EdgeInsets.symmetric(
@@ -563,7 +994,7 @@ class _FocusScreenState extends State<FocusScreen>
 
                 const SizedBox(height: 18),
 
-                // Duration presets
+                // DURATION PRESETS
                 Row(
                   children: [
                     for (final minutes in _presets) ...[
@@ -592,10 +1023,10 @@ class _FocusScreenState extends State<FocusScreen>
                   ],
                 ),
 
-                if (_isRunning) ...[
+                if (_sessionId != null) ...[
                   const SizedBox(height: 10),
                   const Text(
-                    'Pause the timer to change its duration.',
+                    'Reset the session to change its duration.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: GalaxyColors.textSecondary,
@@ -614,7 +1045,8 @@ class _FocusScreenState extends State<FocusScreen>
                 // RESET
                 Center(
                   child: TextButton.icon(
-                    onPressed: _resetTimer,
+                    onPressed:
+                        _busy ? null : _resetTimer,
                     icon: const Icon(
                       Icons.restart_alt_rounded,
                       size: 21,
@@ -723,7 +1155,9 @@ class _FocusScreenState extends State<FocusScreen>
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: _isRunning ? null : onTap,
+          onTap: (_busy || _sessionId != null)
+              ? null
+              : onTap,
           borderRadius: BorderRadius.circular(13),
           child: Padding(
             padding: const EdgeInsets.symmetric(
@@ -734,7 +1168,9 @@ class _FocusScreenState extends State<FocusScreen>
               label,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: _isRunning
+                color: (_isRunning ||
+                        _busy ||
+                        _sessionId != null)
                     ? GalaxyColors.textSecondary
                     : selected
                         ? GalaxyColors.textPrimary
@@ -789,7 +1225,11 @@ class _FocusScreenState extends State<FocusScreen>
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: _isRunning ? _pauseTimer : _startTimer,
+          onTap: _busy
+              ? null
+              : (_isRunning
+                  ? _pauseTimer
+                  : _startTimer),
           borderRadius: BorderRadius.circular(19),
           child: Center(
             child: Row(
@@ -806,8 +1246,9 @@ class _FocusScreenState extends State<FocusScreen>
                 const SizedBox(width: 10),
 
                 AnimatedSwitcher(
-                  duration:
-                      const Duration(milliseconds: 220),
+                  duration: const Duration(
+                    milliseconds: 220,
+                  ),
                   child: Text(
                     _actionLabel,
                     key: ValueKey(_actionLabel),
@@ -852,7 +1293,8 @@ class _FocusScreenState extends State<FocusScreen>
 
           Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 Text(
                   'Focus Tip',
@@ -904,7 +1346,6 @@ class _FocusRingPainter extends CustomPainter {
     );
 
     const startAngle = -math.pi / 2;
-
     final sweepAngle = 2 * math.pi * progress;
 
     // Circular atmosphere.
@@ -973,9 +1414,11 @@ class _FocusRingPainter extends CustomPainter {
       // Bright progress indicator.
       final tip = Offset(
         center.dx +
-            radius * math.cos(startAngle + sweepAngle),
+            radius *
+                math.cos(startAngle + sweepAngle),
         center.dy +
-            radius * math.sin(startAngle + sweepAngle),
+            radius *
+                math.sin(startAngle + sweepAngle),
       );
 
       canvas.drawCircle(
@@ -987,12 +1430,14 @@ class _FocusRingPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _FocusRingPainter oldDelegate) {
+  bool shouldRepaint(
+    covariant _FocusRingPainter oldDelegate,
+  ) {
     return oldDelegate.progress != progress;
   }
 }
 
-// Decorative galaxy mountains.
+// Decorative Galaxy mountains behind the timer.
 class _FocusMountainsPainter extends CustomPainter {
   const _FocusMountainsPainter();
 
@@ -1005,7 +1450,6 @@ class _FocusMountainsPainter extends CustomPainter {
       ..lineTo(size.width * 0.43, size.height * 0.9)
       ..lineTo(size.width * 0.7, size.height * 0.79)
       ..lineTo(size.width, size.height * 0.87)
-      ..lineTo(size.width, size.height)
       ..close();
 
     canvas.drawPath(

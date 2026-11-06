@@ -7,6 +7,70 @@ import '../../models/progress.dart';
 import '../../providers/progress_provider.dart';
 import '../../widgets/pet_view.dart';
 
+// Evolution milestones match Laravel PetEvolutionService.
+const List<String> _petStageKeys = [
+  'egg',
+  'hatchling',
+  'junior',
+  'adult',
+  'elder',
+];
+
+const List<int> _petStageLevels = [1, 2, 5, 10, 20];
+
+// Convert legacy stage names to the five Laravel stage names.
+String _normalizeStage(String stage) {
+  final normalized = stage.trim().toLowerCase();
+
+  switch (normalized) {
+    case 'baby':
+      return 'hatchling';
+    case 'teen':
+      return 'junior';
+    default:
+      return normalized;
+  }
+}
+
+String _stageLabel(String stage) {
+  final normalized = _normalizeStage(stage);
+
+  if (normalized.isEmpty) return 'Unknown';
+
+  return '${normalized[0].toUpperCase()}'
+      '${normalized.substring(1)}';
+}
+
+int _stageIndex(String stage) {
+  final index = _petStageKeys.indexOf(
+    _normalizeStage(stage),
+  );
+
+  return index < 0 ? 0 : index;
+}
+
+// Display a stage consistent with the current student level,
+// even if an older API response still contains 'baby' or 'teen'.
+// The backend PetEvolutionService remains responsible for
+// storing the actual evolution stage in the database.
+String _stageForProgress(Progress progress) {
+  final level = progress.level;
+  var stageIndex = 0;
+
+  for (var i = 0; i < _petStageLevels.length; i++) {
+    if (level >= _petStageLevels[i]) {
+      stageIndex = i;
+    }
+  }
+
+  final expectedStage = _petStageKeys[stageIndex];
+  final reportedStage = _normalizeStage(progress.petStage);
+
+  return reportedStage == expectedStage
+      ? reportedStage
+      : expectedStage;
+}
+
 class PetScreen extends ConsumerWidget {
   const PetScreen({super.key});
 
@@ -23,6 +87,7 @@ class PetScreen extends ConsumerWidget {
               color: GalaxyColors.purple,
             ),
           ),
+
           error: (error, stack) => Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
@@ -45,7 +110,8 @@ class PetScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    'Check your server connection and try again.',
+                    'Check your server connection '
+                    'and try again.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: GalaxyColors.textSecondary,
@@ -53,15 +119,19 @@ class PetScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 18),
                   FilledButton(
-                    onPressed: () =>
-                        ref.invalidate(progressProvider),
+                    onPressed: () {
+                      ref.invalidate(progressProvider);
+                    },
                     child: const Text('Try Again'),
                   ),
                 ],
               ),
             ),
           ),
-          data: (progress) => _PetContent(progress: progress),
+
+          data: (progress) => _PetContent(
+            progress: progress,
+          ),
         ),
       ),
     );
@@ -69,7 +139,9 @@ class PetScreen extends ConsumerWidget {
 }
 
 class _PetContent extends ConsumerWidget {
-  const _PetContent({required this.progress});
+  const _PetContent({
+    required this.progress,
+  });
 
   final Progress progress;
 
@@ -87,15 +159,166 @@ class _PetContent extends ConsumerWidget {
     );
   }
 
+  // Show evolution information and milestones.
+  Future<void> _showEvolutionDetails(
+    BuildContext context,
+  ) async {
+    final currentStage = _stageForProgress(progress);
+    final currentIndex = _stageIndex(currentStage);
+
+    final hasNext =
+        currentIndex < _petStageKeys.length - 1;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: GalaxyColors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(
+              color: GalaxyColors.purple,
+            ),
+          ),
+          title: const Text(
+            'Pet Evolution',
+            style: TextStyle(
+              color: GalaxyColors.textPrimary,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: [
+                // Current evolution stage.
+                Text(
+                  'Current stage: '
+                  '${_stageLabel(currentStage)}',
+                  style: const TextStyle(
+                    color: GalaxyColors.gold,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+
+                const SizedBox(height: 9),
+
+                // Next evolution requirement.
+                Text(
+                  hasNext
+                      ? 'Next: '
+                          '${_stageLabel(_petStageKeys[currentIndex + 1])} '
+                          'at Level '
+                          '${_petStageLevels[currentIndex + 1]}.'
+                      : 'Your companion has reached '
+                          'its final stage!',
+                  style: const TextStyle(
+                    color: GalaxyColors.textPrimary,
+                    fontSize: 13,
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                const Text(
+                  'Evolution happens automatically '
+                  'when you earn enough XP to reach '
+                  'the required level.',
+                  style: TextStyle(
+                    color: GalaxyColors.textSecondary,
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+
+                const SizedBox(height: 18),
+
+                // All five pet evolution milestones.
+                for (
+                  var i = 0;
+                  i < _petStageKeys.length;
+                  i++
+                )
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      bottom: 10,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          progress.level >=
+                                  _petStageLevels[i]
+                              ? Icons.check_circle_rounded
+                              : Icons.lock_outline_rounded,
+                          color: progress.level >=
+                                  _petStageLevels[i]
+                              ? GalaxyColors.mint
+                              : GalaxyColors.textSecondary,
+                          size: 19,
+                        ),
+
+                        const SizedBox(width: 10),
+
+                        Expanded(
+                          child: Text(
+                            _stageLabel(
+                              _petStageKeys[i],
+                            ),
+                            style: const TextStyle(
+                              color: GalaxyColors.textPrimary,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+
+                        Text(
+                          'Lv. ${_petStageLevels[i]}',
+                          style: const TextStyle(
+                            color: GalaxyColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Got it'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(
+    BuildContext context,
+    WidgetRef ref,
+  ) {
     return RefreshIndicator(
       color: GalaxyColors.purple,
       backgroundColor: GalaxyColors.surface,
-      onRefresh: () => ref.refresh(progressProvider.future),
+      onRefresh: () =>
+          ref.refresh(progressProvider.future),
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(19, 22, 19, 130),
+        padding: const EdgeInsets.fromLTRB(
+          19,
+          22,
+          19,
+          130,
+        ),
         children: [
           // PAGE HEADER
           Row(
@@ -113,10 +336,13 @@ class _PetContent extends ConsumerWidget {
                   size: 28,
                 ),
               ),
+
               const SizedBox(width: 12),
+
               const Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
                   children: [
                     Text(
                       'Pet',
@@ -137,6 +363,20 @@ class _PetContent extends ConsumerWidget {
                   ],
                 ),
               ),
+
+              // NEW: Refresh pet progress from Laravel.
+              IconButton(
+                tooltip: 'Refresh pet progress',
+                onPressed: () {
+                  ref.invalidate(progressProvider);
+                },
+                icon: const Icon(
+                  Icons.refresh_rounded,
+                  color: GalaxyColors.blue,
+                  size: 25,
+                ),
+              ),
+
               const Icon(
                 Icons.auto_awesome_rounded,
                 color: GalaxyColors.gold,
@@ -150,24 +390,33 @@ class _PetContent extends ConsumerWidget {
           // PET ON FLOATING GALAXY PLATFORM
           _PetSpotlight(
             progress: progress,
-            onFeed: () => _showComingSoon(
-              context,
-              'Feeding',
-            ),
-            onCustomize: () => _showComingSoon(
-              context,
-              'Pet customization',
-            ),
-            onEvolve: () => _showComingSoon(
-              context,
-              'Pet evolution',
-            ),
+
+            onFeed: () {
+              _showComingSoon(
+                context,
+                'Feeding',
+              );
+            },
+
+            onCustomize: () {
+              _showComingSoon(
+                context,
+                'Pet customization',
+              );
+            },
+
+            // NEW: Show pet evolution milestones.
+            onEvolve: () {
+              _showEvolutionDetails(context);
+            },
           ),
 
           const SizedBox(height: 10),
 
           // PET INFORMATION CARD
-          _PetInfoCard(progress: progress),
+          _PetInfoCard(
+            progress: progress,
+          ),
 
           const SizedBox(height: 22),
 
@@ -184,17 +433,21 @@ class _PetContent extends ConsumerWidget {
               ),
             ),
             child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 Icon(
                   Icons.auto_awesome_rounded,
                   color: GalaxyColors.gold,
                   size: 25,
                 ),
+
                 SizedBox(width: 12),
+
                 Expanded(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
                     children: [
                       Text(
                         'Keep Growing Together!',
@@ -204,7 +457,9 @@ class _PetContent extends ConsumerWidget {
                           fontWeight: FontWeight.w800,
                         ),
                       ),
+
                       SizedBox(height: 7),
+
                       Text(
                         'Stay consistent with your studies, '
                         'complete your tasks, and keep building '
@@ -254,7 +509,7 @@ class _PetSpotlight extends StatelessWidget {
           return Stack(
             clipBehavior: Clip.none,
             children: [
-              // Galaxy glow behind the pet
+              // Galaxy glow behind the pet.
               Positioned(
                 left: width * 0.03,
                 top: 30,
@@ -276,7 +531,7 @@ class _PetSpotlight extends StatelessWidget {
                 ),
               ),
 
-              // Decorative stars
+              // Decorative stars.
               const Positioned(
                 left: 14,
                 top: 86,
@@ -317,7 +572,7 @@ class _PetSpotlight extends StatelessWidget {
                 ),
               ),
 
-              // Floating island
+              // Floating island.
               Positioned(
                 left: islandLeft,
                 bottom: 18,
@@ -328,8 +583,7 @@ class _PetSpotlight extends StatelessWidget {
                 ),
               ),
 
-              // Animated pet
-              // FIX: 235px gives the larger PetView room.
+              // Animated pet.
               Positioned(
                 left: width * 0.045,
                 bottom: 105,
@@ -337,13 +591,13 @@ class _PetSpotlight extends StatelessWidget {
                 height: 235,
                 child: Center(
                   child: _FloatingPet(
-                    stage: progress.petStage,
+                    stage: _stageForProgress(progress),
                     mood: progress.petMood,
                   ),
                 ),
               ),
 
-              // Right-side action buttons
+              // Right-side action buttons.
               Positioned(
                 right: 0,
                 top: 50,
@@ -395,7 +649,8 @@ class _FloatingPet extends StatefulWidget {
   final String mood;
 
   @override
-  State<_FloatingPet> createState() => _FloatingPetState();
+  State<_FloatingPet> createState() =>
+      _FloatingPetState();
 }
 
 class _FloatingPetState extends State<_FloatingPet>
@@ -526,9 +781,11 @@ class _PetActionButton extends StatelessWidget {
   }
 }
 
-// Pet name, level, XP and mood panel.
+// Pet name, level, XP, mood, and evolution information.
 class _PetInfoCard extends StatelessWidget {
-  const _PetInfoCard({required this.progress});
+  const _PetInfoCard({
+    required this.progress,
+  });
 
   final Progress progress;
 
@@ -538,18 +795,45 @@ class _PetInfoCard extends StatelessWidget {
     final targetXp = progress.xpForNextLevel;
 
     final fraction = targetXp > 0
-        ? (currentXp / targetXp).clamp(0.0, 1.0).toDouble()
+        ? (currentXp / targetXp)
+            .clamp(0.0, 1.0)
+            .toDouble()
         : 0.0;
 
-    final mood = progress.petMood.isEmpty
+    // Mood comes from Laravel's PetMoodService.
+    final currentMood = progress.petMood.trim().toLowerCase();
+    final mood = currentMood.isEmpty
         ? 'Unknown'
-        : '${progress.petMood[0].toUpperCase()}'
-            '${progress.petMood.substring(1)}';
+        : '${currentMood[0].toUpperCase()}'
+            '${currentMood.substring(1)}';
+    final IconData moodIcon;
+    final Color moodColor;
+    switch (currentMood) {
+      case 'happy':
+        moodIcon = Icons.sentiment_very_satisfied_rounded;
+        moodColor = GalaxyColors.gold;
+        break;
+      case 'sad':
+        moodIcon = Icons.sentiment_dissatisfied_rounded;
+        moodColor = GalaxyColors.pink;
+        break;
+      default:
+        moodIcon = Icons.sentiment_neutral_rounded;
+        moodColor = GalaxyColors.blue;
+    }
 
-    final stage = progress.petStage.isEmpty
-        ? 'Unknown'
-        : '${progress.petStage[0].toUpperCase()}'
-            '${progress.petStage.substring(1)}';
+    final currentStage = _stageForProgress(progress);
+    final stage = _stageLabel(currentStage);
+    final currentStageIndex = _stageIndex(currentStage);
+
+    final hasNextStage =
+        currentStageIndex < _petStageKeys.length - 1;
+
+    final nextStageText = hasNextStage
+        ? 'Next: '
+            '${_stageLabel(_petStageKeys[currentStageIndex + 1])} '
+            'at Level ${_petStageLevels[currentStageIndex + 1]}'
+        : 'Final evolution stage reached!';
 
     return Container(
       padding: const EdgeInsets.all(19),
@@ -581,7 +865,7 @@ class _PetInfoCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Pet name and level
+          // Pet name and level.
           Row(
             children: [
               Expanded(
@@ -630,9 +914,10 @@ class _PetInfoCard extends StatelessWidget {
 
           const SizedBox(height: 17),
 
-          // XP progress
+          // XP progress.
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            mainAxisAlignment:
+                MainAxisAlignment.spaceBetween,
             children: [
               const Text(
                 'EXPERIENCE',
@@ -690,15 +975,17 @@ class _PetInfoCard extends StatelessWidget {
 
           const SizedBox(height: 13),
 
-          // Mood
+          // Dynamic pet mood from the Laravel API.
           Row(
             children: [
-              const Icon(
-                Icons.sentiment_very_satisfied_rounded,
-                color: GalaxyColors.gold,
+              Icon(
+                moodIcon,
+                color: moodColor,
                 size: 22,
               ),
+
               const SizedBox(width: 9),
+
               const Text(
                 'Mood:',
                 style: TextStyle(
@@ -706,7 +993,9 @@ class _PetInfoCard extends StatelessWidget {
                   fontSize: 13,
                 ),
               ),
+
               const SizedBox(width: 6),
+
               Text(
                 mood,
                 style: const TextStyle(
@@ -715,7 +1004,9 @@ class _PetInfoCard extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               ),
+
               const Spacer(),
+
               const Icon(
                 Icons.auto_awesome_rounded,
                 color: GalaxyColors.pink,
@@ -726,7 +1017,7 @@ class _PetInfoCard extends StatelessWidget {
 
           const SizedBox(height: 15),
 
-          // Pet stage
+          // Pet growth stage from Laravel.
           Row(
             children: [
               const Icon(
@@ -734,7 +1025,9 @@ class _PetInfoCard extends StatelessWidget {
                 color: GalaxyColors.purple,
                 size: 22,
               ),
+
               const SizedBox(width: 9),
+
               const Text(
                 'Growth Stage:',
                 style: TextStyle(
@@ -742,7 +1035,9 @@ class _PetInfoCard extends StatelessWidget {
                   fontSize: 13,
                 ),
               ),
+
               const SizedBox(width: 6),
+
               Expanded(
                 child: Text(
                   stage,
@@ -755,13 +1050,55 @@ class _PetInfoCard extends StatelessWidget {
               ),
             ],
           ),
+
+          const SizedBox(height: 15),
+
+          // NEW: Next evolution stage information.
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 13,
+              vertical: 11,
+            ),
+            decoration: BoxDecoration(
+              color: GalaxyColors.purple
+                  .withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: GalaxyColors.purple
+                    .withValues(alpha: 0.25),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.auto_awesome_rounded,
+                  size: 17,
+                  color: GalaxyColors.gold,
+                ),
+
+                const SizedBox(width: 8),
+
+                Expanded(
+                  child: Text(
+                    nextStageText,
+                    style: const TextStyle(
+                      color: GalaxyColors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-// Draws the floating galaxy island behind the pet.
+// Draw the floating galaxy island behind the pet.
 class _FloatingIslandPainter extends CustomPainter {
   const _FloatingIslandPainter();
 
@@ -770,7 +1107,7 @@ class _FloatingIslandPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
 
-    // Glowing atmosphere
+    // Glowing atmosphere.
     canvas.drawOval(
       Rect.fromLTWH(
         w * 0.06,
@@ -787,7 +1124,7 @@ class _FloatingIslandPainter extends CustomPainter {
         ),
     );
 
-    // Lower rocky floating island
+    // Lower rocky floating island.
     final lower = Path()
       ..moveTo(w * 0.10, h * 0.28)
       ..lineTo(w * 0.89, h * 0.28)
@@ -814,7 +1151,7 @@ class _FloatingIslandPainter extends CustomPainter {
         ),
     );
 
-    // Polygon details in the rocky island
+    // Polygon details in the rocky island.
     final leftRock = Path()
       ..moveTo(w * 0.11, h * 0.32)
       ..lineTo(w * 0.38, h * 0.42)
@@ -829,7 +1166,7 @@ class _FloatingIslandPainter extends CustomPainter {
             .withValues(alpha: 0.7),
     );
 
-    // Top surface
+    // Top surface.
     final topRect = Rect.fromLTWH(
       w * 0.08,
       h * 0.10,
@@ -849,7 +1186,7 @@ class _FloatingIslandPainter extends CustomPainter {
         ).createShader(topRect),
     );
 
-    // Glowing island edge
+    // Glowing island edge.
     canvas.drawOval(
       topRect,
       Paint()
@@ -858,7 +1195,7 @@ class _FloatingIslandPainter extends CustomPainter {
         ..color = GalaxyColors.purple,
     );
 
-    // Small crystal decorations
+    // Small crystal decorations.
     _drawCrystal(
       canvas,
       Offset(w * 0.17, h * 0.27),
@@ -889,9 +1226,18 @@ class _FloatingIslandPainter extends CustomPainter {
   ) {
     final path = Path()
       ..moveTo(center.dx, center.dy - height)
-      ..lineTo(center.dx + height * 0.36, center.dy)
-      ..lineTo(center.dx, center.dy + height * 0.22)
-      ..lineTo(center.dx - height * 0.36, center.dy)
+      ..lineTo(
+        center.dx + height * 0.36,
+        center.dy,
+      )
+      ..lineTo(
+        center.dx,
+        center.dy + height * 0.22,
+      )
+      ..lineTo(
+        center.dx - height * 0.36,
+        center.dy,
+      )
       ..close();
 
     canvas.drawPath(
