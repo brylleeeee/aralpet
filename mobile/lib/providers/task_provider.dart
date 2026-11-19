@@ -9,5 +9,7 @@ final taskRepositoryProvider = Provider<TaskRepository>((ref) {
 });
 
 final taskProvider = FutureProvider<List<Task>>((ref) {
+  // Reload when a different account logs in.
+  ref.watch(authProvider.select((auth) => auth.value?.id));
   return ref.watch(taskRepositoryProvider).fetchTasks();
 });

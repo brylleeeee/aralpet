@@ -355,7 +355,7 @@ Things to know:
 - Login state lives in `providers/auth_provider.dart`. The router in `core/router.dart` automatically sends logged-out users to Login and logged-in users to Home, so screens do not navigate after login or logout.
 - `ApiService` turns API errors into an `ApiException` with a readable `message`, so a screen can show `e.message` directly.
 - The API URL is in `core/env.dart`.
-- The dashboard still uses mock data (`repositories/progress_repository.dart`) until the API has a progress endpoint.
+- The dashboard and pet screen read `GET /progress`. Focus sessions are timed by the server, so the focus timer cannot be paused; stopping early cancels the session with no XP.
 
 ### API (`api/`)
 
@@ -383,13 +383,17 @@ API conventions:
 | Feature | API | Mobile app |
 | --- | --- | --- |
 | Register, login, logout, GET /me | Done | Done (connected) |
-| Subjects CRUD | Done (not yet tested) | Not started |
-| Tasks CRUD | Done (not yet tested) | Placeholder screen |
-| Mark task complete (+XP) | Not started | Not started |
-| Progress (XP, level, streak) | Not started | Dashboard with mock data |
-| Focus sessions | Not started | Placeholder screen |
-| Pet, badges, weekly summary | Not started | Placeholder screens |
+| Subjects CRUD | Done | Not started |
+| Tasks CRUD | Done | Done (connected) |
+| Mark task complete (+XP) | Done (ledger, daily cap, on-time bonus) | Done (connected) |
+| Progress (XP, level, streak, pet stage/mood) | Done (`GET /progress`) | Done (dashboard and pet use real data) |
+| Focus sessions (start, finish, cancel) | Done (`/sessions`, server-timed) | Done (connected) |
+| Badges awarded automatically | Done | No badges screen yet |
+| Pet rename, badges list, weekly summary | Not started | Placeholder screens |
+| Profile screen | `PUT /me` done | Not started |
 | Admin | Not started | Not started |
+
+All reward rules are in `api/app/Services/GamificationService.php` and read their numbers from the `settings` table (`SettingSeeder`). Run `php artisan test` to check them.
 
 Update this table when you finish a feature.
 

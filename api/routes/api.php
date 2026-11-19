@@ -2,6 +2,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\FocusSessionController;
 use App\Http\Controllers\Api\V1\ProgressController;
 use App\Http\Controllers\Api\V1\SubjectController;
 use App\Http\Controllers\Api\V1\TaskController;
@@ -42,6 +43,14 @@ Route::prefix('v1')->group(function () {
                 TaskController::class,
                 'complete',
             ])->name('tasks.complete');
+
+            // Focus sessions (timed by the server)
+            Route::get('sessions', [FocusSessionController::class, 'index']);
+            Route::post('sessions', [FocusSessionController::class, 'store']);
+            Route::patch('sessions/{session}/finish', [FocusSessionController::class, 'finish'])
+                ->whereNumber('session');
+            Route::patch('sessions/{session}/cancel', [FocusSessionController::class, 'cancel'])
+                ->whereNumber('session');
 
         });
 

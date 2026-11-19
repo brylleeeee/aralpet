@@ -23,12 +23,17 @@ class PetView extends StatelessWidget {
     'baby': 'assets/pets/pet_baby.png',
     'teen': 'assets/pets/pet_teen.png',
     'adult': 'assets/pets/pet_adult.png',
+    // Server stage names (egg, hatchling, junior, adult, elder)
+    'hatchling': 'assets/pets/pet_baby.png',
+    'junior': 'assets/pets/pet_teen.png',
+    'elder': 'assets/pets/pet_adult.png',
   };
 
   static const Map<String, String> _moodLabels = {
     'happy': 'Happy',
     'okay': 'Okay',
     'sad': 'Needs attention',
+    'sleepy': 'Sleepy',
   };
 
   @override
