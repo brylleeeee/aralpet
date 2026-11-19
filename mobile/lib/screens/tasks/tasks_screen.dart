@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api_service.dart';
 import '../../core/theme.dart';
 import '../../models/task.dart';
+import '../../providers/pet_provider.dart';
 import '../../providers/progress_provider.dart';
 import '../../providers/task_provider.dart';
 
@@ -54,6 +55,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
       // Refresh the task list and the dashboard's XP data.
       ref.invalidate(taskProvider);
       ref.invalidate(progressProvider);
+      refreshRewards(ref);
 
       if (result.alreadyCompleted) {
         ScaffoldMessenger.of(context).showSnackBar(

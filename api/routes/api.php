@@ -1,9 +1,12 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\BadgeController;
 use App\Http\Controllers\Api\V1\FocusSessionController;
+use App\Http\Controllers\Api\V1\PetController;
 use App\Http\Controllers\Api\V1\ProgressController;
 use App\Http\Controllers\Api\V1\SubjectController;
+use App\Http\Controllers\Api\V1\SummaryController;
 use App\Http\Controllers\Api\V1\TaskController;
 use Illuminate\Support\Facades\Route;
 
@@ -50,6 +53,12 @@ Route::prefix('v1')->group(function () {
                 ->whereNumber('session');
             Route::patch('sessions/{session}/cancel', [FocusSessionController::class, 'cancel'])
                 ->whereNumber('session');
+
+            // Pet, badges and weekly summary
+            Route::get('pet', [PetController::class, 'show']);
+            Route::put('pet', [PetController::class, 'update']);
+            Route::get('badges', [BadgeController::class, 'index']);
+            Route::get('summary/weekly', [SummaryController::class, 'weekly']);
 
         });
 

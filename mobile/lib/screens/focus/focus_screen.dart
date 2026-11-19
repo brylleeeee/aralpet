@@ -11,6 +11,7 @@ import '../../core/theme.dart';
 import '../../models/focus_session.dart';
 import '../../models/task.dart';
 import '../../providers/focus_session_provider.dart';
+import '../../providers/pet_provider.dart';
 import '../../providers/progress_provider.dart';
 import '../../providers/task_provider.dart';
 import '../../repositories/focus_session_repository.dart';
@@ -184,6 +185,7 @@ class _FocusScreenState extends ConsumerState<FocusScreen>
 
       ref.invalidate(progressProvider);
       ref.invalidate(taskProvider);
+      refreshRewards(ref);
 
       if (!mounted) return;
       setState(() => _isFinished = true);

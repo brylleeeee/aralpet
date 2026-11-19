@@ -221,6 +221,37 @@ class GamificationService
         return 'sleepy';
     }
 
+    /**
+     * The student's current value for each badge condition type,
+     * e.g. ['streak' => 4, 'tasks_completed' => 12, ...].
+     */
+    public function badgeValues(User $user, int $streak, int $level): array
+    {
+        $minMinutes = $this->setting('min_session_minutes');
+        $qualifyingSessions = $user->focusSessions()
+            ->where('status', 'finished')
+            ->where('duration_minutes', '>=', $minMinutes);
+
+        return [
+            'streak' => $streak,
+            'level' => $level,
+            'tasks_completed' => $user->tasks()->where('status', 'completed')->count(),
+            'sessions_completed' => (clone $qualifyingSessions)->count(),
+            'focus_minutes' => (int) (clone $qualifyingSessions)->sum('duration_minutes'),
+        ];
+    }
+
+    // Every pet stage with the level it starts at, lowest first.
+    public static function stages(): array
+    {
+        $stages = [];
+        foreach (array_reverse(self::PET_STAGES, true) as $minLevel => $stage) {
+            $stages[] = ['stage' => $stage, 'min_level' => $minLevel];
+        }
+
+        return $stages;
+    }
+
     private function lockProgress(User $user): Progress
     {
         return $user->progress()->lockForUpdate()->first()
@@ -267,20 +298,7 @@ class GamificationService
             return [];
         }
 
-        $minMinutes = $this->setting('min_session_minutes');
-        $values = [
-            'streak' => (int) $progress->current_streak,
-            'level' => (int) $progress->level,
-            'tasks_completed' => $user->tasks()->where('status', 'completed')->count(),
-            'sessions_completed' => $user->focusSessions()
-                ->where('status', 'finished')
-                ->where('duration_minutes', '>=', $minMinutes)
-                ->count(),
-            'focus_minutes' => (int) $user->focusSessions()
-                ->where('status', 'finished')
-                ->where('duration_minutes', '>=', $minMinutes)
-                ->sum('duration_minutes'),
-        ];
+        $values = $this->badgeValues($user, (int) $progress->current_streak, (int) $progress->level);
 
         $newBadges = [];
         foreach ($badges as $badge) {

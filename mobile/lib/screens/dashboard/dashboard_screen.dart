@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme.dart';
 import '../../models/progress.dart';
 import '../../models/task.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/progress_provider.dart';
 import '../../providers/task_provider.dart';
 import '../../widgets/pet_view.dart';
@@ -136,11 +135,10 @@ class _GalaxyHome extends ConsumerWidget {
                   ),
                 ),
                 child: IconButton(
-                  tooltip: 'Log out',
-                  onPressed: () =>
-                      ref.read(authProvider.notifier).logout(),
+                  tooltip: 'Profile',
+                  onPressed: () => context.push('/profile'),
                   icon: const Icon(
-                    Icons.logout_rounded,
+                    Icons.person_rounded,
                     color: GalaxyColors.textPrimary,
                   ),
                 ),
@@ -178,6 +176,39 @@ class _GalaxyHome extends ConsumerWidget {
                   iconColor: GalaxyColors.gold,
                   value: '${progress.tasksDueToday}',
                   label: 'Tasks Due Today',
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // Shortcuts to the weekly summary and badges
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(17),
+                  onTap: () => context.push('/summary'),
+                  child: _MiniStatCard(
+                    icon: Icons.bar_chart_rounded,
+                    iconColor: GalaxyColors.blue,
+                    value: '${progress.minutesToday} min',
+                    label: 'Today · Weekly Summary ›',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(17),
+                  onTap: () => context.push('/badges'),
+                  child: _MiniStatCard(
+                    icon: Icons.emoji_events_rounded,
+                    iconColor: GalaxyColors.gold,
+                    value: '${progress.xpToday}/${progress.dailyCap} XP',
+                    label: 'Today · Badges ›',
+                  ),
                 ),
               ),
             ],

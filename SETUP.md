@@ -388,9 +388,11 @@ API conventions:
 | Mark task complete (+XP) | Done (ledger, daily cap, on-time bonus) | Done (connected) |
 | Progress (XP, level, streak, pet stage/mood) | Done (`GET /progress`) | Done (dashboard and pet use real data) |
 | Focus sessions (start, finish, cancel) | Done (`/sessions`, server-timed) | Done (connected) |
-| Badges awarded automatically | Done | No badges screen yet |
-| Pet rename, badges list, weekly summary | Not started | Placeholder screens |
-| Profile screen | `PUT /me` done | Not started |
+| Badges awarded automatically | Done | Done |
+| Pet rename and stages (`/pet`) | Done | Done (Pet tab buttons) |
+| Badges list (`/badges`) | Done | Done (`/badges` page) |
+| Weekly summary (`/summary/weekly`) | Done | Done (`/summary` page with chart) |
+| Profile and password (`PUT /me`) | Done | Done (`/profile` page, logout moved here) |
 | Admin | Not started | Not started |
 
 All reward rules are in `api/app/Services/GamificationService.php` and read their numbers from the `settings` table (`SettingSeeder`). Run `php artisan test` to check them.
