@@ -104,7 +104,8 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
 
   Future<void> _refreshTasks() async {
     try {
-      await ref.refresh(taskProvider.future);
+      ref.invalidate(taskProvider);
+      await ref.read(taskProvider.future);
     } catch (_) {
       // The error state will appear in the task list.
     }
@@ -1263,7 +1264,7 @@ class _TaskFormDialogState
             const SizedBox(height: 12),
 
             DropdownButtonFormField<String>(
-              value: _priority,
+              initialValue: _priority,
               decoration: const InputDecoration(
                 labelText: 'Priority',
                 prefixIcon: Icon(Icons.flag_outlined),

@@ -24,7 +24,7 @@ class AdminRepository {
   Future<AdminUserPage> fetchUsers({String? search, String? status, int page = 1}) async {
     final response = await _api.get('/admin/users', query: {
       if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
-      if (status != null) 'status': status,
+      'status': ?status,
       'page': page,
     });
     final meta = _map((response as Map)['meta']);
