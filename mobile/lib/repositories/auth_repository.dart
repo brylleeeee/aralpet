@@ -64,6 +64,28 @@ class AuthRepository {
     }
   }
 
+  // PUT /me  (profile details, and optionally a new password)
+  Future<User> updateProfile({
+    required String name,
+    String? course,
+    int? yearLevel,
+    String? currentPassword,
+    String? newPassword,
+    String? newPasswordConfirmation,
+  }) async {
+    final body = await _api.put('/me', data: {
+      'name': name,
+      'course': (course == null || course.trim().isEmpty) ? null : course.trim(),
+      'year_level': yearLevel,
+      if (newPassword != null && newPassword.isNotEmpty) ...{
+        'current_password': currentPassword,
+        'password': newPassword,
+        'password_confirmation': newPasswordConfirmation,
+      },
+    });
+    return User.fromJson(Map<String, dynamic>.from(body['data'] as Map));
+  }
+
   Future<User> _saveSession(dynamic body) async {
     final data = body['data'] as Map<String, dynamic>;
     await _storage.saveToken(data['token'] as String);

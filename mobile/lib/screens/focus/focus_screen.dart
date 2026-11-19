@@ -4,19 +4,32 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/api_service.dart';
 import '../../core/theme.dart';
+import '../../models/focus_session.dart';
+import '../../models/task.dart';
+import '../../providers/focus_session_provider.dart';
+import '../../providers/pet_provider.dart';
+import '../../providers/progress_provider.dart';
+import '../../providers/task_provider.dart';
+import '../../repositories/focus_session_repository.dart';
 
-class FocusScreen extends StatefulWidget {
+class FocusScreen extends ConsumerStatefulWidget {
   const FocusScreen({super.key});
 
   @override
-  State<FocusScreen> createState() => _FocusScreenState();
+  ConsumerState<FocusScreen> createState() => _FocusScreenState();
 }
 
-class _FocusScreenState extends State<FocusScreen>
+class _FocusScreenState extends ConsumerState<FocusScreen>
     with WidgetsBindingObserver {
   static const List<int> _presets = [25, 45, 60];
+
+  // Must match the API's limits (min_session_minutes setting and max 180).
+  static const int _minMinutes = 10;
+  static const int _maxMinutes = 180;
 
   Timer? _ticker;
   DateTime? _endsAt;
@@ -27,10 +40,19 @@ class _FocusScreenState extends State<FocusScreen>
   bool _isRunning = false;
   bool _isFinished = false;
 
+  // The session running on the server, and the task it is for.
+  FocusSession? _session;
+  int? _taskId;
+
+  // True while a request to the server is in progress.
+  bool _busy = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Continue a session that was running when the app was closed.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _restoreSession());
   }
 
   @override
@@ -47,21 +69,69 @@ class _FocusScreenState extends State<FocusScreen>
     super.dispose();
   }
 
-  // Start or resume the timer.
-  void _startTimer() {
-    if (_isRunning) return;
+  FocusSessionRepository get _repo => ref.read(focusSessionRepositoryProvider);
 
-    _ticker?.cancel();
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
 
-    if (_remaining <= Duration.zero) {
-      _remaining = _duration;
+  // Pick up an active session from the server, if there is one.
+  Future<void> _restoreSession() async {
+    try {
+      final active = await _repo.fetchActive();
+      if (active != null && mounted) {
+        _resumeSession(active);
+      }
+    } catch (_) {
+      // No connection yet; the student can still start a new session.
     }
+  }
+
+  void _resumeSession(FocusSession session) {
+    _session = session;
+    _taskId = session.taskId;
+    _duration = Duration(minutes: session.plannedMinutes);
+    _runCountdown(session.endsAt);
+  }
+
+  // Start a new session on the server, then the countdown.
+  Future<void> _startTimer() async {
+    if (_isRunning || _busy) return;
+
+    setState(() => _busy = true);
+
+    try {
+      final session = await _repo.start(
+        plannedMinutes: _duration.inMinutes,
+        taskId: _taskId,
+      );
+      _session = session;
+      // Use the phone's clock for a new session, so the ring starts full.
+      _runCountdown(DateTime.now().add(_duration));
+    } on ActiveSessionExists catch (e) {
+      await _askAboutUnfinishedSession(e.session);
+    } on ApiException catch (e) {
+      _showMessage(e.message);
+    } catch (_) {
+      _showMessage('Could not start the session. Please try again.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _runCountdown(DateTime endsAt) {
+    _ticker?.cancel();
 
     setState(() {
       _isRunning = true;
       _isFinished = false;
-      _endsAt = DateTime.now().add(_remaining);
+      _endsAt = endsAt;
     });
+
+    _updateRemaining();
 
     _ticker = Timer.periodic(
       const Duration(milliseconds: 250),
@@ -84,11 +154,10 @@ class _FocusScreenState extends State<FocusScreen>
       setState(() {
         _remaining = Duration.zero;
         _isRunning = false;
-        _isFinished = true;
         _endsAt = null;
       });
 
-      _showCompletionDialog();
+      _finishSession();
       return;
     }
 
@@ -103,24 +172,151 @@ class _FocusScreenState extends State<FocusScreen>
     }
   }
 
-  // Pause the countdown.
-  void _pauseTimer() {
-    if (!_isRunning || _endsAt == null) return;
+  // The countdown reached zero: ask the server for the XP.
+  Future<void> _finishSession() async {
+    final session = _session;
+    if (session == null || _busy) return;
 
-    _updateRemaining();
+    setState(() => _busy = true);
 
-    if (!_isRunning || _endsAt == null) return;
+    try {
+      final result = await _repo.finish(session.id);
+      _session = null;
 
+      ref.invalidate(progressProvider);
+      ref.invalidate(taskProvider);
+      refreshRewards(ref);
+
+      if (!mounted) return;
+      setState(() => _isFinished = true);
+      await _showCompletionDialog(result);
+    } on ApiException catch (e) {
+      if (e.statusCode == 409) {
+        // Already ended (e.g. finished from another device).
+        _session = null;
+        if (mounted) setState(() => _isFinished = true);
+      } else {
+        // Keep _session so the student can try again.
+        _showMessage('${e.message} Tap "Claim XP" to try again.');
+      }
+    } catch (_) {
+      _showMessage('Could not save the session. Tap "Claim XP" to try again.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // Stop early. The session is cancelled on the server and earns no XP.
+  Future<void> _giveUp() async {
+    final session = _session;
+    if (session == null || _busy) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: GalaxyColors.surface,
+        title: const Text(
+          'Give up this session?',
+          style: TextStyle(color: GalaxyColors.textPrimary),
+        ),
+        content: const Text(
+          'Stopping early cancels the session, and it will not earn any XP.',
+          style: TextStyle(color: GalaxyColors.textSecondary, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Keep Focusing'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Give Up'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+
+    try {
+      await _repo.cancel(session.id);
+    } on ApiException catch (e) {
+      // 409 means the session had already ended; reset anyway.
+      if (e.statusCode != 409) {
+        _showMessage(e.message);
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+    } catch (_) {
+      _showMessage('Could not cancel the session. Please try again.');
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
+
+    _session = null;
+    if (!mounted) return;
+
+    // Stop the countdown first; _resetTimer() does nothing while it runs.
     _ticker?.cancel();
-
     setState(() {
+      _busy = false;
       _isRunning = false;
       _endsAt = null;
     });
+    _resetTimer();
+    _showMessage('Session cancelled. No XP was earned.');
   }
 
-  // Reset the countdown.
+  // A session from before is still running on the server.
+  Future<void> _askAboutUnfinishedSession(FocusSession active) async {
+    if (!mounted) return;
+
+    final resume = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: GalaxyColors.surface,
+        title: const Text(
+          'Unfinished session',
+          style: TextStyle(color: GalaxyColors.textPrimary),
+        ),
+        content: Text(
+          'You still have a ${active.plannedMinutes}-minute session running. '
+          'Continue it, or discard it and start a new one?',
+          style: const TextStyle(color: GalaxyColors.textSecondary, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Discard'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (resume == true) {
+      _resumeSession(active);
+    } else if (resume == false) {
+      try {
+        await _repo.cancel(active.id);
+        _showMessage('Old session discarded. Tap Start Focus again.');
+      } on ApiException catch (e) {
+        _showMessage(e.message);
+      }
+    }
+  }
+
+  // Reset the countdown (only when no session is running).
   void _resetTimer() {
+    if (_isRunning) return;
+
     _ticker?.cancel();
 
     setState(() {
@@ -146,7 +342,7 @@ class _FocusScreenState extends State<FocusScreen>
     });
   }
 
-  // FIXED: Custom duration dialog.
+  // Custom duration dialog.
   // The TextFormField manages its own controller.
   Future<void> _chooseCustomDuration() async {
     if (_isRunning) return;
@@ -197,7 +393,7 @@ class _FocusScreenState extends State<FocusScreen>
               ],
               decoration: const InputDecoration(
                 labelText: 'Minutes',
-                hintText: '1 to 180',
+                hintText: '$_minMinutes to $_maxMinutes',
                 prefixIcon: Icon(
                   Icons.timer_outlined,
                   color: GalaxyColors.purple,
@@ -209,9 +405,9 @@ class _FocusScreenState extends State<FocusScreen>
                 );
 
                 if (minutes == null ||
-                    minutes < 1 ||
-                    minutes > 180) {
-                  return 'Enter 1 to 180 minutes';
+                    minutes < _minMinutes ||
+                    minutes > _maxMinutes) {
+                  return 'Enter $_minMinutes to $_maxMinutes minutes';
                 }
 
                 return null;
@@ -257,17 +453,24 @@ class _FocusScreenState extends State<FocusScreen>
         '${seconds.toString().padLeft(2, '0')}';
   }
 
+  // Countdown ended but the server has not confirmed the XP yet.
+  bool get _awaitingClaim => !_isRunning && _session != null;
+
   String get _timerStatus {
+    if (_busy) {
+      return 'Talking to the server...';
+    }
+
     if (_isRunning) {
       return 'Stay focused';
     }
 
-    if (_isFinished) {
-      return 'Session complete!';
+    if (_awaitingClaim) {
+      return 'Time is up!';
     }
 
-    if (_remaining < _duration) {
-      return 'Timer paused';
+    if (_isFinished) {
+      return 'Session complete!';
     }
 
     return 'Ready when you are';
@@ -275,23 +478,47 @@ class _FocusScreenState extends State<FocusScreen>
 
   String get _actionLabel {
     if (_isRunning) {
-      return 'Pause Session';
+      return 'Give Up';
+    }
+
+    if (_awaitingClaim) {
+      return 'Claim XP';
     }
 
     if (_isFinished) {
       return 'Start Again';
     }
 
-    if (_remaining < _duration) {
-      return 'Resume Session';
-    }
-
     return 'Start Focus';
   }
 
-  // Display a popup when the countdown finishes.
-  Future<void> _showCompletionDialog() async {
+  VoidCallback? get _primaryAction {
+    if (_busy) return null;
+    if (_isRunning) return _giveUp;
+    if (_awaitingClaim) return _finishSession;
+    return _startTimer;
+  }
+
+  // Display the result the server sent back.
+  Future<void> _showCompletionDialog(SessionResult result) async {
     if (!mounted) return;
+
+    final String message;
+    if (!result.qualifies) {
+      message = 'Sessions shorter than $_minMinutes minutes do not earn XP.';
+    } else if (result.capped) {
+      message = 'You reached today\'s XP limit, so this session earned '
+          '${result.xpAwarded} XP.';
+    } else {
+      message = 'You earned ${result.xpAwarded} XP for '
+          '${result.session.durationMinutes ?? _duration.inMinutes} minutes of focus.';
+    }
+
+    final extras = <String>[
+      if (result.leveledUp) 'Level up! You are now level ${result.level}.',
+      if (result.petEvolved) 'Your pet evolved into a ${result.petStage}!',
+      for (final badge in result.newBadges) 'New badge: $badge',
+    ];
 
     await showDialog<void>(
       context: context,
@@ -305,18 +532,20 @@ class _FocusScreenState extends State<FocusScreen>
               width: 1.3,
             ),
           ),
-          title: const Column(
+          title: Column(
             children: [
-              Icon(
+              const Icon(
                 Icons.auto_awesome_rounded,
                 color: GalaxyColors.gold,
                 size: 47,
               ),
-              SizedBox(height: 12),
+              const SizedBox(height: 12),
               Text(
-                'Focus Complete!',
+                result.xpAwarded > 0
+                    ? '+${result.xpAwarded} XP'
+                    : 'Focus Complete!',
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   color: GalaxyColors.textPrimary,
                   fontSize: 23,
                   fontWeight: FontWeight.w900,
@@ -328,24 +557,24 @@ class _FocusScreenState extends State<FocusScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Your ${_duration.inMinutes}-minute '
-                'focus countdown has finished.',
+                message,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: GalaxyColors.textSecondary,
                   height: 1.5,
                 ),
               ),
-              const SizedBox(height: 15),
-              const Text(
-                'Great job staying committed '
-                'to your studies!',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: GalaxyColors.mint,
-                  fontWeight: FontWeight.w700,
+              for (final line in extras) ...[
+                const SizedBox(height: 10),
+                Text(
+                  line,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: GalaxyColors.mint,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
           actionsAlignment: MainAxisAlignment.center,
@@ -359,6 +588,47 @@ class _FocusScreenState extends State<FocusScreen>
           ],
         );
       },
+    );
+  }
+
+  // Optional: link the session to one of the student's pending tasks.
+  Widget _buildTaskPicker() {
+    final tasksAsync = ref.watch(taskProvider);
+    final pending = tasksAsync.value
+            ?.where((task) => !task.isCompleted)
+            .toList() ??
+        const <Task>[];
+
+    // The chosen task may have been completed or deleted meanwhile.
+    final selectedId =
+        pending.any((task) => task.id == _taskId) ? _taskId : null;
+
+    return DropdownButtonFormField<int?>(
+      initialValue: selectedId,
+      key: ValueKey('task-$selectedId-${pending.length}'),
+      isExpanded: true,
+      dropdownColor: GalaxyColors.surface,
+      decoration: const InputDecoration(
+        labelText: 'Focus on (optional)',
+        prefixIcon: Icon(
+          Icons.checklist_rounded,
+          color: GalaxyColors.purple,
+        ),
+      ),
+      items: [
+        const DropdownMenuItem<int?>(
+          value: null,
+          child: Text('No specific task'),
+        ),
+        for (final task in pending)
+          DropdownMenuItem<int?>(
+            value: task.id,
+            child: Text(task.title, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: _isRunning || _busy
+          ? null
+          : (value) => setState(() => _taskId = value),
     );
   }
 
@@ -592,10 +862,14 @@ class _FocusScreenState extends State<FocusScreen>
                   ],
                 ),
 
+                const SizedBox(height: 18),
+
+                _buildTaskPicker(),
+
                 if (_isRunning) ...[
                   const SizedBox(height: 10),
                   const Text(
-                    'Pause the timer to change its duration.',
+                    'Give up the session to change its duration or task.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: GalaxyColors.textSecondary,
@@ -606,7 +880,7 @@ class _FocusScreenState extends State<FocusScreen>
 
                 const SizedBox(height: 28),
 
-                // START / PAUSE / RESUME
+                // START / GIVE UP / CLAIM XP
                 _buildPrimaryButton(),
 
                 const SizedBox(height: 12),
@@ -614,7 +888,9 @@ class _FocusScreenState extends State<FocusScreen>
                 // RESET
                 Center(
                   child: TextButton.icon(
-                    onPressed: _resetTimer,
+                    onPressed: _isRunning || _busy || _awaitingClaim
+                        ? null
+                        : _resetTimer,
                     icon: const Icon(
                       Icons.restart_alt_rounded,
                       size: 21,
@@ -751,7 +1027,7 @@ class _FocusScreenState extends State<FocusScreen>
     );
   }
 
-  // Main Start / Pause / Resume button.
+  // Main Start / Give Up / Claim XP button.
   Widget _buildPrimaryButton() {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
@@ -789,7 +1065,7 @@ class _FocusScreenState extends State<FocusScreen>
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: _isRunning ? _pauseTimer : _startTimer,
+          onTap: _primaryAction,
           borderRadius: BorderRadius.circular(19),
           child: Center(
             child: Row(
@@ -797,8 +1073,10 @@ class _FocusScreenState extends State<FocusScreen>
               children: [
                 Icon(
                   _isRunning
-                      ? Icons.pause_circle_filled_rounded
-                      : Icons.play_circle_fill_rounded,
+                      ? Icons.stop_circle_rounded
+                      : _awaitingClaim
+                          ? Icons.auto_awesome_rounded
+                          : Icons.play_circle_fill_rounded,
                   color: Colors.white,
                   size: 27,
                 ),

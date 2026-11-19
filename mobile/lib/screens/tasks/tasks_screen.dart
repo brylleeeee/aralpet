@@ -1,12 +1,17 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api_service.dart';
 import '../../core/theme.dart';
+import '../../models/subject.dart';
 import '../../models/task.dart';
+import '../../providers/pet_provider.dart';
 import '../../providers/progress_provider.dart';
+import '../../providers/subject_provider.dart';
 import '../../providers/task_provider.dart';
+import '../subjects/subjects_screen.dart';
 
 class TasksScreen extends ConsumerStatefulWidget {
   const TasksScreen({super.key});
@@ -18,7 +23,117 @@ class TasksScreen extends ConsumerStatefulWidget {
 class _TasksScreenState extends ConsumerState<TasksScreen> {
   bool _showCompleted = false;
 
+  // Due filter: all, today, week, overdue. Subject filter: null = all.
+  String _due = 'all';
+  int? _subjectId;
+
   final Set<int> _completingTaskIds = {};
+
+  static const Map<String, String> _dueLabels = {
+    'all': 'All',
+    'today': 'Today',
+    'week': 'This Week',
+    'overdue': 'Overdue',
+  };
+
+  bool _matchesFilters(Task task) {
+    if (_subjectId != null && task.subjectId != _subjectId) return false;
+    if (_due == 'all') return true;
+
+    final due = task.dueDate;
+    if (due == null) return false;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(due.year, due.month, due.day);
+    // The week ends on Sunday, like the API's "week" filter.
+    final endOfWeek = DateTime(today.year, today.month, today.day + (7 - today.weekday));
+
+    switch (_due) {
+      case 'today':
+        return day == today;
+      case 'week':
+        return !day.isBefore(today) && !day.isAfter(endOfWeek);
+      case 'overdue':
+        return !task.isCompleted && day.isBefore(today);
+      default:
+        return true;
+    }
+  }
+
+  Widget _chip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    Color? dot,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        label: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (dot != null) ...[
+              CircleAvatar(radius: 5, backgroundColor: dot),
+              const SizedBox(width: 6),
+            ],
+            Text(label),
+          ],
+        ),
+        selected: selected,
+        onSelected: (_) => onTap(),
+      ),
+    );
+  }
+
+  // Row of due-date chips, then a row of subject chips.
+  Widget _buildDueAndSubjectFilters() {
+    final subjects = ref.watch(subjectsProvider).value ?? const <Subject>[];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final entry in _dueLabels.entries)
+                _chip(
+                  label: entry.value,
+                  selected: _due == entry.key,
+                  onTap: () => setState(() => _due = entry.key),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _chip(
+                label: 'All subjects',
+                selected: _subjectId == null,
+                onTap: () => setState(() => _subjectId = null),
+              ),
+              for (final subject in subjects)
+                _chip(
+                  label: subject.name,
+                  dot: subject.colorValue,
+                  selected: _subjectId == subject.id,
+                  onTap: () => setState(() => _subjectId = subject.id),
+                ),
+              ActionChip(
+                avatar: const Icon(Icons.tune_rounded, size: 16),
+                label: const Text('Subjects'),
+                onPressed: () => context.push('/subjects'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 
   // Add or edit an existing task.
   Future<void> _openTaskForm([Task? task]) async {
@@ -30,6 +145,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
     if (changed == true && mounted) {
       ref.invalidate(taskProvider);
       ref.invalidate(progressProvider);
+      ref.invalidate(subjectsProvider); // task counts per subject
     }
   }
 
@@ -54,6 +170,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
       // Refresh the task list and the dashboard's XP data.
       ref.invalidate(taskProvider);
       ref.invalidate(progressProvider);
+      refreshRewards(ref);
 
       if (result.alreadyCompleted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -102,7 +219,9 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
 
   Future<void> _refreshTasks() async {
     try {
-      await ref.refresh(taskProvider.future);
+      ref.invalidate(subjectsProvider);
+      ref.invalidate(taskProvider);
+      await ref.read(taskProvider.future);
     } catch (_) {
       // The error state will appear in the task list.
     }
@@ -171,7 +290,10 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                       ],
                     ),
 
-                    data: (tasks) {
+                    data: (allTasks) {
+                      final tasks =
+                          allTasks.where(_matchesFilters).toList();
+
                       final pending = tasks
                           .where((task) => !task.isCompleted)
                           .toList();
@@ -193,7 +315,11 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                             completed.length,
                           ),
 
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 12),
+
+                          _buildDueAndSubjectFilters(),
+
+                          const SizedBox(height: 18),
 
                           if (visibleTasks.isEmpty)
                             _buildMessage(
@@ -203,9 +329,11 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                               title: _showCompleted
                                   ? 'No completed tasks yet'
                                   : 'No pending tasks',
-                              subtitle: _showCompleted
-                                  ? 'Your finished tasks will appear here.'
-                                  : 'Add your first task to get started.',
+                              subtitle: _due != 'all' || _subjectId != null
+                                  ? 'No tasks match these filters.'
+                                  : _showCompleted
+                                      ? 'Your finished tasks will appear here.'
+                                      : 'Add your first task to get started.',
                               buttonText: _showCompleted
                                   ? null
                                   : 'Add Task',
@@ -224,9 +352,13 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                                   ),
                                   child: _TaskCard(
                                     task: task,
-                                    accent: entry.key.isEven
-                                        ? GalaxyColors.purple
-                                        : GalaxyColors.blue,
+                                    // Subject color, or alternating
+                                    // colors for tasks without a subject.
+                                    accent: task.subjectColor != null
+                                        ? hexToColor(task.subjectColor)
+                                        : entry.key.isEven
+                                            ? GalaxyColors.purple
+                                            : GalaxyColors.blue,
                                     isCompleting:
                                         _completingTaskIds.contains(
                                       task.id,
@@ -1011,6 +1143,7 @@ class _TaskFormDialogState
 
   late String _priority;
   DateTime? _dueDate;
+  int? _subjectId;
 
   bool _saving = false;
   String? _error;
@@ -1032,6 +1165,7 @@ class _TaskFormDialogState
 
     _priority = widget.task?.priority ?? 'medium';
     _dueDate = widget.task?.dueDate;
+    _subjectId = widget.task?.subjectId;
   }
 
   @override
@@ -1039,6 +1173,73 @@ class _TaskFormDialogState
     _titleController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  // Add a subject without leaving the task form.
+  Future<void> _addSubject() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => const SubjectFormDialog(),
+    );
+    if (saved != true || !mounted) return;
+
+    ref.invalidate(subjectsProvider);
+    final subjects = await ref.read(subjectsProvider.future);
+    if (!mounted || subjects.isEmpty) return;
+
+    // Select the newest subject (highest id).
+    final newest = subjects.reduce((a, b) => a.id > b.id ? a : b);
+    setState(() => _subjectId = newest.id);
+  }
+
+  Widget _buildSubjectPicker() {
+    final subjects = ref.watch(subjectsProvider).value ?? const <Subject>[];
+    final locked = _saving || _isCompleted;
+
+    // The task's subject may have been deleted meanwhile.
+    final selected = subjects.any((s) => s.id == _subjectId) ? _subjectId : null;
+
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<int?>(
+            key: ValueKey('subject-$selected-${subjects.length}'),
+            initialValue: selected,
+            isExpanded: true,
+            dropdownColor: GalaxyColors.surface,
+            decoration: const InputDecoration(
+              labelText: 'Subject',
+              prefixIcon: Icon(Icons.class_outlined),
+            ),
+            items: [
+              const DropdownMenuItem<int?>(
+                value: null,
+                child: Text('No subject'),
+              ),
+              for (final subject in subjects)
+                DropdownMenuItem<int?>(
+                  value: subject.id,
+                  child: Row(
+                    children: [
+                      CircleAvatar(radius: 6, backgroundColor: subject.colorValue),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(subject.name, overflow: TextOverflow.ellipsis),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+            onChanged: locked ? null : (value) => setState(() => _subjectId = value),
+          ),
+        ),
+        IconButton(
+          tooltip: 'New subject',
+          onPressed: locked ? null : _addSubject,
+          icon: const Icon(Icons.add_circle_outline_rounded, color: GalaxyColors.purple),
+        ),
+      ],
+    );
   }
 
   Future<void> _selectDate() async {
@@ -1083,7 +1284,7 @@ class _TaskFormDialogState
           notes: notes,
           priority: _priority,
           dueDate: _dueDate,
-          subjectId: widget.task!.subjectId,
+          subjectId: _subjectId,
         );
       } else {
         await repository.createTask(
@@ -1091,6 +1292,7 @@ class _TaskFormDialogState
           notes: notes,
           priority: _priority,
           dueDate: _dueDate,
+          subjectId: _subjectId,
         );
       }
 
@@ -1260,8 +1462,12 @@ class _TaskFormDialogState
 
             const SizedBox(height: 12),
 
+            _buildSubjectPicker(),
+
+            const SizedBox(height: 12),
+
             DropdownButtonFormField<String>(
-              value: _priority,
+              initialValue: _priority,
               decoration: const InputDecoration(
                 labelText: 'Priority',
                 prefixIcon: Icon(Icons.flag_outlined),

@@ -1,9 +1,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../core/api_service.dart';
 import '../../core/theme.dart';
+import '../../models/pet_info.dart';
 import '../../models/progress.dart';
+import '../../providers/pet_provider.dart';
 import '../../providers/progress_provider.dart';
 import '../../widgets/pet_view.dart';
 
@@ -73,17 +77,37 @@ class _PetContent extends ConsumerWidget {
 
   final Progress progress;
 
-  void _showComingSoon(
-    BuildContext context,
-    String feature,
-  ) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '$feature is not available yet. '
-          'We will connect this feature later.',
-        ),
-      ),
+  // Ask for a new name and save it with PUT /pet.
+  Future<void> _rename(BuildContext context, WidgetRef ref) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenameDialog(currentName: progress.petName),
+    );
+    if (name == null || name == progress.petName) return;
+
+    try {
+      await ref.read(petRepositoryProvider).renamePet(name);
+      ref.invalidate(progressProvider);
+      ref.invalidate(petProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Your pet is now called $name.')),
+        );
+      }
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    }
+  }
+
+  // Show every stage and the level each one needs.
+  void _showStages(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => const _StagesDialog(),
     );
   }
 
@@ -150,18 +174,9 @@ class _PetContent extends ConsumerWidget {
           // PET ON FLOATING GALAXY PLATFORM
           _PetSpotlight(
             progress: progress,
-            onFeed: () => _showComingSoon(
-              context,
-              'Feeding',
-            ),
-            onCustomize: () => _showComingSoon(
-              context,
-              'Pet customization',
-            ),
-            onEvolve: () => _showComingSoon(
-              context,
-              'Pet evolution',
-            ),
+            onRename: () => _rename(context, ref),
+            onBadges: () => context.push('/badges'),
+            onStages: () => _showStages(context),
           ),
 
           const SizedBox(height: 10),
@@ -231,15 +246,15 @@ class _PetContent extends ConsumerWidget {
 class _PetSpotlight extends StatelessWidget {
   const _PetSpotlight({
     required this.progress,
-    required this.onFeed,
-    required this.onCustomize,
-    required this.onEvolve,
+    required this.onRename,
+    required this.onBadges,
+    required this.onStages,
   });
 
   final Progress progress;
-  final VoidCallback onFeed;
-  final VoidCallback onCustomize;
-  final VoidCallback onEvolve;
+  final VoidCallback onRename;
+  final VoidCallback onBadges;
+  final VoidCallback onStages;
 
   @override
   Widget build(BuildContext context) {
@@ -350,28 +365,28 @@ class _PetSpotlight extends StatelessWidget {
                 child: Column(
                   children: [
                     _PetActionButton(
-                      icon: Icons.favorite_rounded,
-                      label: 'Feed',
+                      icon: Icons.edit_rounded,
+                      label: 'Rename',
                       color: GalaxyColors.pink,
-                      onTap: onFeed,
+                      onTap: onRename,
                     ),
 
                     const SizedBox(height: 17),
 
                     _PetActionButton(
-                      icon: Icons.checkroom_rounded,
-                      label: 'Customize',
+                      icon: Icons.emoji_events_rounded,
+                      label: 'Badges',
                       color: GalaxyColors.purple,
-                      onTap: onCustomize,
+                      onTap: onBadges,
                     ),
 
                     const SizedBox(height: 17),
 
                     _PetActionButton(
                       icon: Icons.arrow_upward_rounded,
-                      label: 'Evolve',
+                      label: 'Stages',
                       color: GalaxyColors.mint,
-                      onTap: onEvolve,
+                      onTap: onStages,
                     ),
                   ],
                 ),
@@ -916,5 +931,147 @@ class _FloatingIslandPainter extends CustomPainter {
     covariant _FloatingIslandPainter oldDelegate,
   ) {
     return false;
+  }
+}
+
+
+// Text field for the pet's new name.
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.currentName});
+
+  final String currentName;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.currentName);
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_formKey.currentState!.validate()) {
+      Navigator.of(context).pop(_controller.text.trim());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: GalaxyColors.surface,
+      title: const Text(
+        'Rename your pet',
+        style: TextStyle(color: GalaxyColors.textPrimary, fontWeight: FontWeight.bold),
+      ),
+      content: Form(
+        key: _formKey,
+        child: TextFormField(
+          controller: _controller,
+          autofocus: true,
+          maxLength: 50,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Name'),
+          validator: (value) =>
+              (value == null || value.trim().isEmpty) ? 'Enter a name' : null,
+          onFieldSubmitted: (_) => _submit(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
+  }
+}
+
+// The five stages from GET /pet. Evolution happens automatically with level.
+class _StagesDialog extends ConsumerWidget {
+  const _StagesDialog();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final petAsync = ref.watch(petProvider);
+
+    return AlertDialog(
+      backgroundColor: GalaxyColors.surface,
+      title: const Text(
+        'Evolution stages',
+        style: TextStyle(color: GalaxyColors.textPrimary, fontWeight: FontWeight.bold),
+      ),
+      content: petAsync.when(
+        loading: () => const SizedBox(
+          height: 80,
+          child: Center(child: CircularProgressIndicator(color: GalaxyColors.purple)),
+        ),
+        error: (error, _) => Text(
+          error is ApiException ? error.message : 'Could not load the stages.',
+          style: const TextStyle(color: GalaxyColors.textSecondary),
+        ),
+        data: (pet) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final stage in pet.stages)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Row(
+                  children: [
+                    Icon(
+                      stage.stage == pet.stage
+                          ? Icons.pets_rounded
+                          : stage.reached
+                              ? Icons.check_circle_rounded
+                              : Icons.lock_rounded,
+                      color: stage.reached ? GalaxyColors.mint : GalaxyColors.textSecondary,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        stageLabel(stage.stage),
+                        style: TextStyle(
+                          color: GalaxyColors.textPrimary,
+                          fontWeight: stage.stage == pet.stage
+                              ? FontWeight.w900
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      'Level ${stage.minLevel}+',
+                      style: const TextStyle(color: GalaxyColors.textSecondary, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 10),
+            Text(
+              pet.nextStage == null
+                  ? '${pet.name} has reached the final stage!'
+                  : '${pet.name} becomes a ${stageLabel(pet.nextStage!)} '
+                      'at level ${pet.nextStageLevel}. Earn XP from tasks '
+                      'and focus sessions to get there.',
+              style: const TextStyle(color: GalaxyColors.textSecondary, height: 1.4),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
   }
 }

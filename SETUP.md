@@ -183,6 +183,9 @@ Open VS Code with **File → Open Folder → `C:\projects\aralpet\api`**. Use th
    ADMIN_EMAIL=admin@aralpet.test
    ADMIN_PASSWORD=Admin12345
    ```
+   This is the administrator account. Log in with it in the app to open the Admin screen (Users, Reports, Badges & XP).
+   If you change these later, run `php artisan db:seed --class=AdminSeeder` again.
+
    The database lines are already correct for XAMPP (`DB_DATABASE=aralpet`, `DB_USERNAME=root`, empty password).
 3. Make sure MySQL is running in XAMPP. Open http://localhost/phpmyadmin, click **New**, name the database `aralpet`, and click **Create**.
 4. Create the tables and the starting data:
@@ -355,7 +358,7 @@ Things to know:
 - Login state lives in `providers/auth_provider.dart`. The router in `core/router.dart` automatically sends logged-out users to Login and logged-in users to Home, so screens do not navigate after login or logout.
 - `ApiService` turns API errors into an `ApiException` with a readable `message`, so a screen can show `e.message` directly.
 - The API URL is in `core/env.dart`.
-- The dashboard still uses mock data (`repositories/progress_repository.dart`) until the API has a progress endpoint.
+- The dashboard and pet screen read `GET /progress`. Focus sessions are timed by the server, so the focus timer cannot be paused; stopping early cancels the session with no XP.
 
 ### API (`api/`)
 
@@ -383,13 +386,20 @@ API conventions:
 | Feature | API | Mobile app |
 | --- | --- | --- |
 | Register, login, logout, GET /me | Done | Done (connected) |
-| Subjects CRUD | Done (not yet tested) | Not started |
-| Tasks CRUD | Done (not yet tested) | Placeholder screen |
-| Mark task complete (+XP) | Not started | Not started |
-| Progress (XP, level, streak) | Not started | Dashboard with mock data |
-| Focus sessions | Not started | Placeholder screen |
-| Pet, badges, weekly summary | Not started | Placeholder screens |
-| Admin | Not started | Not started |
+| Subjects CRUD | Done | Done (`/subjects` page, subject picker in task form) |
+| Task filters (today, week, overdue, by subject) | Done | Done (chips on the Tasks tab) |
+| Tasks CRUD | Done | Done (connected) |
+| Mark task complete (+XP) | Done (ledger, daily cap, on-time bonus) | Done (connected) |
+| Progress (XP, level, streak, pet stage/mood) | Done (`GET /progress`) | Done (dashboard and pet use real data) |
+| Focus sessions (start, finish, cancel) | Done (`/sessions`, server-timed) | Done (connected) |
+| Badges awarded automatically | Done | Done |
+| Pet rename and stages (`/pet`) | Done | Done (Pet tab buttons) |
+| Badges list (`/badges`) | Done | Done (`/badges` page) |
+| Weekly summary (`/summary/weekly`) | Done | Done (`/summary` page with chart) |
+| Profile and password (`PUT /me`) | Done | Done (`/profile` page, logout moved here) |
+| Admin: users (search, deactivate), reports, badges, XP rules (`/admin/...`) | Done | Done (admin accounts open the Admin screen) |
+
+All reward rules are in `api/app/Services/GamificationService.php` and read their numbers from the `settings` table (`SettingSeeder`). Run `php artisan test` to check them.
 
 Update this table when you finish a feature.
 
