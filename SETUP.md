@@ -386,7 +386,8 @@ API conventions:
 | Feature | API | Mobile app |
 | --- | --- | --- |
 | Register, login, logout, GET /me | Done | Done (connected) |
-| Subjects CRUD | Done | Not started |
+| Subjects CRUD | Done | Done (`/subjects` page, subject picker in task form) |
+| Task filters (today, week, overdue, by subject) | Done | Done (chips on the Tasks tab) |
 | Tasks CRUD | Done | Done (connected) |
 | Mark task complete (+XP) | Done (ledger, daily cap, on-time bonus) | Done (connected) |
 | Progress (XP, level, streak, pet stage/mood) | Done (`GET /progress`) | Done (dashboard and pet use real data) |

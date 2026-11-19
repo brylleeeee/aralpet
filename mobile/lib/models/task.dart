@@ -9,6 +9,7 @@ class Task {
   final DateTime? completedAt;
   final int? subjectId;
   final String? subjectName;
+  final String? subjectColor; // hex, e.g. #4F46E5
   final DateTime? createdAt;
 
   const Task({
@@ -21,6 +22,7 @@ class Task {
     this.completedAt,
     this.subjectId,
     this.subjectName,
+    this.subjectColor,
     this.createdAt,
   });
 
@@ -44,6 +46,9 @@ class Task {
       subjectId: json['subject_id'] as int?,
       subjectName: subject is Map && subject['name'] != null
           ? subject['name'].toString()
+          : null,
+      subjectColor: subject is Map && subject['color'] != null
+          ? subject['color'].toString()
           : null,
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'].toString())

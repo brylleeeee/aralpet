@@ -38,24 +38,39 @@ class TaskRepository {
       query['due'] = due;
     }
 
-    final response = await _api.get(
-      '/tasks',
-      query: query.isEmpty ? null : query,
-    );
+    // The API sends 15 tasks per page; load every page.
+    final tasks = <Task>[];
+    var page = 1;
+    var lastPage = 1;
 
-    if (response is! Map || response['data'] is! List) {
-      throw ApiException(
-        'Invalid task response from the server.',
+    do {
+      final response = await _api.get(
+        '/tasks',
+        query: {...query, 'page': page},
       );
-    }
 
-    return (response['data'] as List)
-        .map(
+      if (response is! Map || response['data'] is! List) {
+        throw ApiException(
+          'Invalid task response from the server.',
+        );
+      }
+
+      tasks.addAll(
+        (response['data'] as List).map(
           (item) => Task.fromJson(
             Map<String, dynamic>.from(item as Map),
           ),
-        )
-        .toList();
+        ),
+      );
+
+      final meta = response['meta'];
+      lastPage = meta is Map && meta['last_page'] is num
+          ? (meta['last_page'] as num).toInt()
+          : page;
+      page++;
+    } while (page <= lastPage && page <= 50);
+
+    return tasks;
   }
 
   // Create a new task.

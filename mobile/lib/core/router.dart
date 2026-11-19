@@ -15,6 +15,7 @@ import '../screens/badges/badges_screen.dart';
 import '../screens/summary/summary_screen.dart';
 import '../screens/profile/profile_screen.dart';
 import '../screens/admin/admin_screen.dart';
+import '../screens/subjects/subjects_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   // Re-checks the redirect whenever the login state changes.
@@ -55,6 +56,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/badges', builder: (context, state) => const BadgesScreen()),
       GoRoute(path: '/summary', builder: (context, state) => const SummaryScreen()),
       GoRoute(path: '/profile', builder: (context, state) => const ProfileScreen()),
+      GoRoute(path: '/subjects', builder: (context, state) => const SubjectsScreen()),
       GoRoute(path: '/admin', builder: (context, state) => const AdminScreen()),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) =>
