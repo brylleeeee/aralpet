@@ -14,6 +14,7 @@ import '../screens/pet/pet_screen.dart';
 import '../screens/badges/badges_screen.dart';
 import '../screens/summary/summary_screen.dart';
 import '../screens/profile/profile_screen.dart';
+import '../screens/admin/admin_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   // Re-checks the redirect whenever the login state changes.
@@ -34,9 +35,16 @@ final routerProvider = Provider<GoRouter>((ref) {
       // Still checking the saved token: stay on the splash screen.
       if (!auth.hasValue) return onSplash ? null : '/splash';
 
-      final loggedIn = auth.requireValue != null;
-      if (!loggedIn) return onAuthPage ? null : '/login';
-      if (onSplash || onAuthPage) return '/home';
+      final user = auth.requireValue;
+      if (user == null) return onAuthPage ? null : '/login';
+
+      // Administrators use the admin screen (and their profile);
+      // students cannot open admin pages.
+      final home = user.isAdmin ? '/admin' : '/home';
+      final onAdminPage = location.startsWith('/admin');
+      if (onSplash || onAuthPage) return home;
+      if (user.isAdmin && !onAdminPage && location != '/profile') return home;
+      if (!user.isAdmin && onAdminPage) return home;
       return null;
     },
     routes: [
@@ -47,6 +55,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/badges', builder: (context, state) => const BadgesScreen()),
       GoRoute(path: '/summary', builder: (context, state) => const SummaryScreen()),
       GoRoute(path: '/profile', builder: (context, state) => const ProfileScreen()),
+      GoRoute(path: '/admin', builder: (context, state) => const AdminScreen()),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) =>
             MainShell(navigationShell: navigationShell),

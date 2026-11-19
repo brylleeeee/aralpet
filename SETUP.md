@@ -183,6 +183,9 @@ Open VS Code with **File → Open Folder → `C:\projects\aralpet\api`**. Use th
    ADMIN_EMAIL=admin@aralpet.test
    ADMIN_PASSWORD=Admin12345
    ```
+   This is the administrator account. Log in with it in the app to open the Admin screen (Users, Reports, Badges & XP).
+   If you change these later, run `php artisan db:seed --class=AdminSeeder` again.
+
    The database lines are already correct for XAMPP (`DB_DATABASE=aralpet`, `DB_USERNAME=root`, empty password).
 3. Make sure MySQL is running in XAMPP. Open http://localhost/phpmyadmin, click **New**, name the database `aralpet`, and click **Create**.
 4. Create the tables and the starting data:
@@ -393,7 +396,7 @@ API conventions:
 | Badges list (`/badges`) | Done | Done (`/badges` page) |
 | Weekly summary (`/summary/weekly`) | Done | Done (`/summary` page with chart) |
 | Profile and password (`PUT /me`) | Done | Done (`/profile` page, logout moved here) |
-| Admin | Not started | Not started |
+| Admin: users (search, deactivate), reports, badges, XP rules (`/admin/...`) | Done | Done (admin accounts open the Admin screen) |
 
 All reward rules are in `api/app/Services/GamificationService.php` and read their numbers from the `settings` table (`SettingSeeder`). Run `php artisan test` to check them.
 

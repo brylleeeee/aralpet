@@ -24,6 +24,7 @@ class GalaxyPageHeader extends StatelessWidget {
       children: [
         IconButton(
           tooltip: 'Back',
+          // The router sends administrators from /home to /admin.
           onPressed: () => context.canPop() ? context.pop() : context.go('/home'),
           icon: const Icon(Icons.arrow_back_rounded, color: GalaxyColors.textPrimary),
         ),
