@@ -257,7 +257,14 @@ class _FocusScreenState extends ConsumerState<FocusScreen>
 
     _session = null;
     if (!mounted) return;
-    setState(() => _busy = false);
+
+    // Stop the countdown first; _resetTimer() does nothing while it runs.
+    _ticker?.cancel();
+    setState(() {
+      _busy = false;
+      _isRunning = false;
+      _endsAt = null;
+    });
     _resetTimer();
     _showMessage('Session cancelled. No XP was earned.');
   }
